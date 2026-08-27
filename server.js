@@ -23,13 +23,13 @@ if (process.env.YT_COOKIES) {
     fs.writeFileSync(COOKIES_PATH, process.env.YT_COOKIES);
     console.log('Cookies YouTube écrits dans /tmp/cookies.txt');
   } catch (err) {
-    console.error('Erreur lors de l’écriture des cookies:', err.message);
+    console.error('Erreur écriture cookies:', err.message);
   }
 } else {
-  console.warn('ATTENTION: La variable d’environnement YT_COOKIES n’est pas définie dans Railway.');
+  console.warn('ATTENTION: Variable YT_COOKIES absente.');
 }
 
-// 3. Route de diagnostic des formats (requise par v0)
+// 3. Route de diagnostic /api/formats (demandée par v0)
 app.get('/api/formats', (req, res) => {
   const id = req.query.id || 'dQw4w9WgXcQ';
   const targetUrl = `https://www.youtube.com/watch?v=${id}`;
@@ -48,7 +48,7 @@ app.get('/api/formats', (req, res) => {
   }
 });
 
-// 4. Route de vérification de version
+// 4. Route de version /api/version
 app.get('/api/version', (req, res) => {
   try {
     const v = execSync('yt-dlp --version').toString().trim();
@@ -58,14 +58,14 @@ app.get('/api/version', (req, res) => {
   }
 });
 
-// 5. Configuration du dossier public de sortie
+// 5. Dossier public
 const publicDir = path.join(__dirname, 'public');
 if (!fs.existsSync(publicDir)) {
   fs.mkdirSync(publicDir, { recursive: true });
 }
 app.use('/public', express.static(publicDir));
 
-// 6. Traitement principal de la vidéo
+// 6. Traitement principal
 app.post('/api/process-video', async (req, res) => {
   const { youtubeUrl, startTime = 0, duration = 30 } = req.body;
 
@@ -96,22 +96,18 @@ app.post('/api/process-video', async (req, res) => {
 
     ytdlpArgs.push(youtubeUrl);
 
-    // Étape A : Téléchargement avec yt-dlp
+    // Téléchargement
     await new Promise((resolve, reject) => {
       const ytdlp = spawn('yt-dlp', ytdlpArgs);
       let ytdlpErr = '';
-      
-      ytdlp.stderr.on('data', (data) => { 
-        ytdlpErr += data.toString(); 
-      });
-      
+      ytdlp.stderr.on('data', (data) => { ytdlpErr += data.toString(); });
       ytdlp.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`yt-dlp s'est arrêté avec le code ${code}: ${ytdlpErr}`));
+        else reject(new Error(`yt-dlp error ${code}: ${ytdlpErr}`));
       });
     });
 
-    // Étape B : Recadrage 9:16 et encodage avec ffmpeg
+    // Découpage + Conversion 9:16 ffmpeg
     const ffmpegArgs = [
       "-y",
       "-ss", String(startTime),
@@ -127,21 +123,14 @@ app.post('/api/process-video', async (req, res) => {
     await new Promise((resolve, reject) => {
       const ffmpeg = spawn('ffmpeg', ffmpegArgs);
       let ffmpegErr = '';
-      
-      ffmpeg.stderr.on('data', (data) => { 
-        ffmpegErr += data.toString(); 
-      });
-      
+      ffmpeg.stderr.on('data', (data) => { ffmpegErr += data.toString(); });
       ffmpeg.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`ffmpeg s'est arrêté avec le code ${code}: ${ffmpegErr}`));
+        else reject(new Error(`ffmpeg error ${code}: ${ffmpegErr}`));
       });
     });
 
-    // Nettoyage du fichier temporaire
-    if (fs.existsSync(inputPath)) {
-      fs.unlinkSync(inputPath);
-    }
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.get('host');
@@ -150,13 +139,11 @@ app.post('/api/process-video', async (req, res) => {
     return res.json({ clipUrl });
 
   } catch (error) {
-    if (fs.existsSync(inputPath)) {
-      fs.unlinkSync(inputPath);
-    }
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
     console.error('Erreur traitement vidéo:', error);
     return res.status(500).json({ error: 'Échec du traitement vidéo', details: error.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Serveur démarré et à l'écoute sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
