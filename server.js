@@ -16,6 +16,16 @@ try {
   console.log('Échec maj yt-dlp:', e.message);
 }
 
+// Route de diagnostic requise par v0
+app.get('/api/version', (req, res) => {
+  try {
+    const v = execSync('yt-dlp --version').toString().trim();
+    res.json({ ok: true, ytdlp: v });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Charger les cookies YouTube depuis la variable Railway
 const COOKIES_PATH = '/tmp/cookies.txt';
 if (process.env.YT_COOKIES) {
