@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -8,7 +8,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Charger les cookies YouTube depuis la variable Railway
+// 1. Force la mise à jour de yt-dlp au démarrage du serveur
+try {
+  execSync('yt-dlp -U');
+  console.log('yt-dlp mis à jour avec succès.');
+} catch (err) {
+  console.log('Tentative mise à jour yt-dlp:', err.message);
+}
+
+// 2. Gestion des cookies YouTube depuis la variable Railway
 const COOKIES_PATH = '/tmp/cookies.txt';
 if (process.env.YT_COOKIES) {
   fs.writeFileSync(COOKIES_PATH, process.env.YT_COOKIES);
@@ -35,7 +43,7 @@ app.post('/api/process-video', async (req, res) => {
 
   try {
     const ytdlpArgs = [
-      "-f", "bv*[height<=720]+ba/b[height<=720]/best",
+      "-f", "bv*[height<=720][vcodec^=avc1]+ba/b[height<=720]/best",
       "--merge-output-format", "mp4",
       "--cookies", COOKIES_PATH,
       "--extractor-args", "youtube:player_client=android,ios,web",
@@ -94,3 +102,4 @@ app.post('/api/process-video', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
+
