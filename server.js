@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { spawn } = require('child_process');
-const path = require('path');
+const path = path = require('path');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
@@ -43,11 +43,11 @@ function downloadFile(url, destPath) {
 
 // Routes de diagnostic et santé
 app.get('/api/version', (req, res) => {
-  res.json({ ok: true, mode: 'Cobalt-API + FFmpeg' });
+  res.json({ ok: true, mode: 'Cobalt v10 + FFmpeg' });
 });
 
 app.get('/api/formats', (req, res) => {
-  res.type('text/plain').send('Mode Cobalt actif. Téléchargement délégué à l\'API Cobalt.');
+  res.type('text/plain').send('Mode Cobalt actif. Téléchargement délégué.');
 });
 
 // Dossier public pour stocker les clips 9:16 générés
@@ -71,10 +71,10 @@ app.post('/api/process-video', async (req, res) => {
   const outputPath = path.join(publicDir, outputFileName);
 
   try {
-    console.log(`[1/3] Demande du lien vidéo à l'API Cobalt pour : ${youtubeUrl}`);
+    console.log(`[1/3] Demande du lien vidéo à l'API Cobalt v10 pour : ${youtubeUrl}`);
     
-    // Appel à l'API Cobalt
-    const cobaltReq = await fetch('https://api.cobalt.tools/api/json', {
+    // Appel à l'instance Cobalt v10 active
+    const cobaltReq = await fetch('https://cobalt-api.kwiatekm.com/', {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
@@ -82,19 +82,21 @@ app.post('/api/process-video', async (req, res) => {
       },
       body: JSON.stringify({
         url: youtubeUrl,
-        vCodec: 'h264'
+        videoQuality: '720'
       })
     });
 
     const cobaltData = await cobaltReq.json();
 
-    if (!cobaltData || !cobaltData.url) {
+    if (!cobaltData || (!cobaltData.url && cobaltData.status !== 'redirect' && cobaltData.status !== 'tunnel')) {
       console.error('Réponse Cobalt invalide:', cobaltData);
-      throw new Error(`Erreur API Cobalt: ${cobaltData.text || 'Lien vidéo introuvable'}`);
+      throw new Error(`Erreur extraction vidéo: ${cobaltData.text || 'Lien vidéo introuvable'}`);
     }
 
+    const downloadUrl = cobaltData.url;
+
     console.log('[2/3] Téléchargement du fichier source...');
-    await downloadFile(cobaltData.url, inputPath);
+    await downloadFile(downloadUrl, inputPath);
 
     console.log('[3/3] Découpage et conversion 9:16 avec FFmpeg...');
     const ffmpegArgs = [
