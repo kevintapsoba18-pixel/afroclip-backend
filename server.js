@@ -1,71 +1,63 @@
 const express = require('express');
 const cors = require('cors');
-const { spawn, execSync } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
+const http = require('http');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. Mise à jour de yt-dlp au démarrage
-try {
-  execSync('pip3 install --break-system-packages --upgrade yt-dlp', { stdio: 'inherit' });
-  console.log('yt-dlp mis à jour avec succès.');
-} catch (e) {
-  console.log('Avertissement maj yt-dlp:', e.message);
+// Helper pour télécharger un fichier depuis une URL vers un disque local
+function downloadFile(url, destPath) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith('https') ? https : http;
+    const request = protocol.get(url, (response) => {
+      // Gérer les redirections (301, 302)
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        return downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
+      }
+      if (response.statusCode !== 200) {
+        return reject(new Error(`Échec du téléchargement, code HTTP: ${response.statusCode}`));
+      }
+
+      const file = fs.createWriteStream(destPath);
+      response.pipe(file);
+
+      file.on('finish', () => {
+        file.close(resolve);
+      });
+
+      file.on('error', (err) => {
+        fs.unlink(destPath, () => reject(err));
+      });
+    });
+
+    request.on('error', (err) => {
+      fs.unlink(destPath, () => reject(err));
+    });
+  });
 }
 
-// 2. Gestion et chargement des cookies YouTube
-const COOKIES_PATH = '/tmp/cookies.txt';
-if (process.env.YT_COOKIES) {
-  try {
-    fs.writeFileSync(COOKIES_PATH, process.env.YT_COOKIES);
-    console.log('Cookies YouTube écrits dans /tmp/cookies.txt');
-  } catch (err) {
-    console.error('Erreur écriture cookies:', err.message);
-  }
-} else {
-  console.warn('ATTENTION: Variable YT_COOKIES absente.');
-}
-
-// 3. Route de diagnostic /api/formats (demandée par v0)
-app.get('/api/formats', (req, res) => {
-  const id = req.query.id || 'dQw4w9WgXcQ';
-  const targetUrl = `https://www.youtube.com/watch?v=${id}`;
-  
-  const hasCookies = fs.existsSync(COOKIES_PATH) && fs.statSync(COOKIES_PATH).size > 0;
-  const cookieArg = hasCookies ? `--cookies ${COOKIES_PATH}` : '';
-  
-  try {
-    const out = execSync(
-      `yt-dlp ${cookieArg} --extractor-args "youtube:player_client=tv,mweb" -F "${targetUrl}"`,
-      { timeout: 60000 }
-    ).toString();
-    res.type('text/plain').send(out);
-  } catch (e) {
-    res.type('text/plain').send(`ERREUR DIAGNOSTIC FORMATS:\n${e.message}\n${e.stderr ? e.stderr.toString() : ''}`);
-  }
-});
-
-// 4. Route de version /api/version
+// Routes de diagnostic et santé
 app.get('/api/version', (req, res) => {
-  try {
-    const v = execSync('yt-dlp --version').toString().trim();
-    res.json({ ok: true, ytdlp: v });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
+  res.json({ ok: true, mode: 'Cobalt-API + FFmpeg' });
 });
 
-// 5. Dossier public
+app.get('/api/formats', (req, res) => {
+  res.type('text/plain').send('Mode Cobalt actif. Téléchargement délégué à l\'API Cobalt.');
+});
+
+// Dossier public pour stocker les clips 9:16 générés
 const publicDir = path.join(__dirname, 'public');
 if (!fs.existsSync(publicDir)) {
   fs.mkdirSync(publicDir, { recursive: true });
 }
 app.use('/public', express.static(publicDir));
 
-// 6. Traitement principal
+// Route principale de traitement vidéo
 app.post('/api/process-video', async (req, res) => {
   const { youtubeUrl, startTime = 0, duration = 30 } = req.body;
 
@@ -78,36 +70,33 @@ app.post('/api/process-video', async (req, res) => {
   const outputFileName = `clip_${timestamp}.mp4`;
   const outputPath = path.join(publicDir, outputFileName);
 
-  const hasCookies = fs.existsSync(COOKIES_PATH) && fs.statSync(COOKIES_PATH).size > 0;
-
   try {
-    const ytdlpArgs = [
-      "-f", "b/best/bv*+ba",
-      "--merge-output-format", "mp4",
-      "--extractor-args", "youtube:player_client=tv,mweb",
-      "--retries", "5",
-      "--no-warnings",
-      "-o", inputPath
-    ];
-
-    if (hasCookies) {
-      ytdlpArgs.push("--cookies", COOKIES_PATH);
-    }
-
-    ytdlpArgs.push(youtubeUrl);
-
-    // Téléchargement
-    await new Promise((resolve, reject) => {
-      const ytdlp = spawn('yt-dlp', ytdlpArgs);
-      let ytdlpErr = '';
-      ytdlp.stderr.on('data', (data) => { ytdlpErr += data.toString(); });
-      ytdlp.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`yt-dlp error ${code}: ${ytdlpErr}`));
-      });
+    console.log(`[1/3] Demande du lien vidéo à l'API Cobalt pour : ${youtubeUrl}`);
+    
+    // Appel à l'API Cobalt
+    const cobaltReq = await fetch('https://api.cobalt.tools/api/json', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        url: youtubeUrl,
+        vCodec: 'h264'
+      })
     });
 
-    // Découpage + Conversion 9:16 ffmpeg
+    const cobaltData = await cobaltReq.json();
+
+    if (!cobaltData || !cobaltData.url) {
+      console.error('Réponse Cobalt invalide:', cobaltData);
+      throw new Error(`Erreur API Cobalt: ${cobaltData.text || 'Lien vidéo introuvable'}`);
+    }
+
+    console.log('[2/3] Téléchargement du fichier source...');
+    await downloadFile(cobaltData.url, inputPath);
+
+    console.log('[3/3] Découpage et conversion 9:16 avec FFmpeg...');
     const ffmpegArgs = [
       "-y",
       "-ss", String(startTime),
@@ -126,21 +115,23 @@ app.post('/api/process-video', async (req, res) => {
       ffmpeg.stderr.on('data', (data) => { ffmpegErr += data.toString(); });
       ffmpeg.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`ffmpeg error ${code}: ${ffmpegErr}`));
+        else reject(new Error(`FFmpeg error ${code}: ${ffmpegErr}`));
       });
     });
 
+    // Suppression du fichier temporaire source
     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.get('host');
     const clipUrl = `${protocol}://${host}/public/${outputFileName}`;
 
+    console.log('Succès ! Clip généré :', clipUrl);
     return res.json({ clipUrl });
 
   } catch (error) {
     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    console.error('Erreur traitement vidéo:', error);
+    console.error('Erreur lors du traitement :', error.message);
     return res.status(500).json({ error: 'Échec du traitement vidéo', details: error.message });
   }
 });
