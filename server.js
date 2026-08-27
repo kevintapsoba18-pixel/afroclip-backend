@@ -28,17 +28,27 @@ app.post('/api/process-video', async (req, res) => {
   const outputPath = path.join(publicDir, outputFileName);
 
   try {
-    // 1. Téléchargement universel (max 720p, n'importe quel codec)
+    // 1. Téléchargement avec contournement anti-bot (Emulation Android/iOS)
     const ytdlpArgs = [
       "-f", "bv*[height<=720]+ba/b[height<=720]/best",
       "--merge-output-format", "mp4",
+      "--extractor-args", "youtube:player_client=android,ios,web",
+      "--user-agent", "com.google.android.youtube/19.09.37 (Linux; U; Android 11)",
+      "--retries", "5",
+      "--fragment-retries", "5",
+      "--no-warnings",
       "-o", inputPath,
       youtubeUrl
     ];
 
     await new Promise((resolve, reject) => {
       const ytdlp = spawn('yt-dlp', ytdlpArgs);
-      ytdlp.on('close', (code) => code === 0 ? resolve() : reject(new Error(`yt-dlp error code ${code}`)));
+      let ytdlpErr = '';
+      ytdlp.stderr.on('data', (data) => { ytdlpErr += data.toString(); });
+      ytdlp.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`yt-dlp error ${code}: ${ytdlpErr}`));
+      });
     });
 
     // 2. Découpage et encodage ultra-rapide avec FFmpeg
@@ -56,7 +66,12 @@ app.post('/api/process-video', async (req, res) => {
 
     await new Promise((resolve, reject) => {
       const ffmpeg = spawn('ffmpeg', ffmpegArgs);
-      ffmpeg.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg error code ${code}`)));
+      let ffmpegErr = '';
+      ffmpeg.stderr.on('data', (data) => { ffmpegErr += data.toString(); });
+      ffmpeg.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg error ${code}: ${ffmpegErr}`));
+      });
     });
 
     // Nettoyage du fichier temporaire
