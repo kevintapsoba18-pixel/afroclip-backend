@@ -8,7 +8,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Dossier pour stocker les clips générés
+// Charger les cookies YouTube depuis la variable Railway
+const COOKIES_PATH = '/tmp/cookies.txt';
+if (process.env.YT_COOKIES) {
+  fs.writeFileSync(COOKIES_PATH, process.env.YT_COOKIES);
+  console.log('Cookies YouTube chargés avec succès.');
+}
+
 const publicDir = path.join(__dirname, 'public');
 if (!fs.existsSync(publicDir)) {
   fs.mkdirSync(publicDir, { recursive: true });
@@ -28,14 +34,12 @@ app.post('/api/process-video', async (req, res) => {
   const outputPath = path.join(publicDir, outputFileName);
 
   try {
-    // 1. Téléchargement avec contournement anti-bot (Emulation Android/iOS)
     const ytdlpArgs = [
       "-f", "bv*[height<=720]+ba/b[height<=720]/best",
       "--merge-output-format", "mp4",
+      "--cookies", COOKIES_PATH,
       "--extractor-args", "youtube:player_client=android,ios,web",
-      "--user-agent", "com.google.android.youtube/19.09.37 (Linux; U; Android 11)",
       "--retries", "5",
-      "--fragment-retries", "5",
       "--no-warnings",
       "-o", inputPath,
       youtubeUrl
@@ -51,7 +55,6 @@ app.post('/api/process-video', async (req, res) => {
       });
     });
 
-    // 2. Découpage et encodage ultra-rapide avec FFmpeg
     const ffmpegArgs = [
       "-y",
       "-ss", String(startTime),
@@ -74,7 +77,6 @@ app.post('/api/process-video', async (req, res) => {
       });
     });
 
-    // Nettoyage du fichier temporaire
     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
