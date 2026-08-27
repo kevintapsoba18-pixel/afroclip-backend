@@ -28,9 +28,9 @@ app.post('/api/process-video', async (req, res) => {
   const outputPath = path.join(publicDir, outputFileName);
 
   try {
-    // 1. Téléchargement rapide en 720p H.264 avec yt-dlp
+    // 1. Téléchargement universel (max 720p, n'importe quel codec)
     const ytdlpArgs = [
-      "-f", "bv*[height<=720][vcodec^=avc1]+ba/b[height<=720]/b",
+      "-f", "bv*[height<=720]+ba/b[height<=720]/best",
       "--merge-output-format", "mp4",
       "-o", inputPath,
       youtubeUrl
@@ -41,7 +41,7 @@ app.post('/api/process-video', async (req, res) => {
       ytdlp.on('close', (code) => code === 0 ? resolve() : reject(new Error(`yt-dlp error code ${code}`)));
     });
 
-    // 2. Découpage et encodage ultra-léger avec FFmpeg (720x1280 & ultrafast pour éviter OOM)
+    // 2. Découpage et encodage ultra-rapide avec FFmpeg
     const ffmpegArgs = [
       "-y",
       "-ss", String(startTime),
@@ -59,7 +59,7 @@ app.post('/api/process-video', async (req, res) => {
       ffmpeg.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg error code ${code}`)));
     });
 
-    // Nettoyage de la vidéo temporaire
+    // Nettoyage du fichier temporaire
     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
