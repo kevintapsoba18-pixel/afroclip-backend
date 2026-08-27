@@ -41,15 +41,15 @@ app.post('/api/process-video', async (req, res) => {
       ytdlp.on('close', (code) => code === 0 ? resolve() : reject(new Error(`yt-dlp error code ${code}`)));
     });
 
-    // 2. Découpage et encodage ultra-rapide avec FFmpeg
+    // 2. Découpage et encodage ultra-léger avec FFmpeg (720x1280 & ultrafast pour éviter OOM)
     const ffmpegArgs = [
       "-y",
       "-ss", String(startTime),
       "-i", inputPath,
       "-t", String(duration),
-      "-vf", "crop=ih*9/16:ih,scale=1080:1920",
+      "-vf", "crop=ih*9/16:ih,scale=720:1280",
       "-c:v", "libx264",
-      "-preset", "veryfast",
+      "-preset", "ultrafast",
       "-c:a", "aac",
       outputPath
     ];
