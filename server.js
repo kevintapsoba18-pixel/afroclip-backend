@@ -1,86 +1,79 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { v4: uuidv4 } = require('uuid');
-const youtubedl = require('youtube-dl-exec');
-const { execFile } = require('child_process');
-const util = require('util');
-const execFileAsync = util.promisify(execFile);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 app.use(cors());
 app.use(express.json());
 
-const DOWNLOAD_DIR = path.join(__dirname, 'tmp', 'downloads');
-const CLIPS_DIR = path.join(__dirname, 'tmp', 'clips');
-[DOWNLOAD_DIR, CLIPS_DIR].forEach((dir) => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
-
-app.use('/clips', express.static(CLIPS_DIR));
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
+// Dossier pour stocker les clips générés
+const publicDir = path.join(__dirname, 'public');
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
+}
+app.use('/public', express.static(publicDir));
 
 app.post('/api/process-video', async (req, res) => {
-  const { url, watermark = true, startSeconds = 0, durationSeconds = 30 } = req.body;
+  const { youtubeUrl, startTime = 0, duration = 30 } = req.body;
 
-  if (!url || !/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(url)) {
-    return res.status(400).json({ error: 'URL YouTube invalide' });
+  if (!youtubeUrl) {
+    return res.status(400).json({ error: 'URL YouTube requise' });
   }
 
-  const jobId = uuidv4();
-  const rawPath = path.join(DOWNLOAD_DIR, `${jobId}.mp4`);
-  const clipFilename = `${jobId}${watermark ? '_watermark' : '_hd'}.mp4`;
-  const clipPath = path.join(CLIPS_DIR, clipFilename);
+  const timestamp = Date.now();
+  const inputPath = path.join(__dirname, `temp_${timestamp}.mp4`);
+  const outputFileName = `clip_${timestamp}.mp4`;
+  const outputPath = path.join(publicDir, outputFileName);
 
   try {
-    await youtubedl(url, {
-      output: rawPath,
-      format: 'mp4',
-      noCheckCertificates: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-    });
-
-    const ffmpegArgs = [
-      '-y',
-      '-i', rawPath,
-      '-ss', String(startSeconds),
-      '-t', String(durationSeconds),
+    // 1. Téléchargement rapide en 720p H.264 avec yt-dlp
+    const ytdlpArgs = [
+      "-f", "bv*[height<=720][vcodec^=avc1]+ba/b[height<=720]/b",
+      "--merge-output-format", "mp4",
+      "-o", inputPath,
+      youtubeUrl
     ];
 
-    if (watermark) {
-      ffmpegArgs.push(
-        '-vf',
-        "crop=ih*9/16:ih,scale=1080:1920,drawtext=text='AfroClip.ai':fontcolor=white@0.6:fontsize=36:x=(w-text_w)/2:y=h-100"
-      );
-    } else {
-      ffmpegArgs.push('-vf', 'crop=ih*9/16:ih,scale=1080:1920');
-    }
-
-    ffmpegArgs.push('-c:a', 'copy', clipPath);
-
-    await execFileAsync('ffmpeg', ffmpegArgs);
-
-    fs.unlink(rawPath, () => {});
-
-    return res.json({
-      jobId,
-      watermark,
-      clipUrl: `/clips/${clipFilename}`,
+    await new Promise((resolve, reject) => {
+      const ytdlp = spawn('yt-dlp', ytdlpArgs);
+      ytdlp.on('close', (code) => code === 0 ? resolve() : reject(new Error(`yt-dlp error code ${code}`)));
     });
-  } catch (err) {
-    console.error('Erreur traitement vidéo:', err);
-    return res.status(500).json({ error: 'Échec du traitement vidéo', details: err.message });
+
+    // 2. Découpage et encodage ultra-rapide avec FFmpeg
+    const ffmpegArgs = [
+      "-y",
+      "-ss", String(startTime),
+      "-i", inputPath,
+      "-t", String(duration),
+      "-vf", "crop=ih*9/16:ih,scale=1080:1920",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-c:a", "aac",
+      outputPath
+    ];
+
+    await new Promise((resolve, reject) => {
+      const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+      ffmpeg.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg error code ${code}`)));
+    });
+
+    // Nettoyage de la vidéo temporaire
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.get('host');
+    const clipUrl = `${protocol}://${host}/public/${outputFileName}`;
+
+    return res.json({ clipUrl });
+
+  } catch (error) {
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    console.error('Erreur traitement vidéo:', error);
+    return res.status(500).json({ error: 'Échec du traitement vidéo', details: error.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`AfroClip backend démarré sur le port ${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
