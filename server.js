@@ -38,34 +38,38 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
       }
     };
 
-    const mode = (process.env.PAYDUNYA_MODE || 'live').trim().toLowerCase();
-    const apiUrl = mode === 'live' 
-      ? 'https://app.paydunya.com/api/v1/checkout-invoice/create'
-      : 'https://app.paydunya.com/sandbox-api/v1/checkout-invoice/create';
+    // Nettoyage rigoureux des clés (supprime les espaces ou retours à la ligne superflus)
+    const masterKey = (process.env.PAYDUNYA_MASTER_KEY || '').trim();
+    const publicKey = (process.env.PAYDUNYA_PUBLIC_KEY || '').trim();
+    const privateKey = (process.env.PAYDUNYA_PRIVATE_KEY || '').trim();
+    const token = (process.env.PAYDUNYA_TOKEN || '').trim();
 
     const response = await axios.post(
-      apiUrl,
+      'https://app.paydunya.com/api/v1/checkout-invoice/create',
       paydunyaData,
       {
         headers: {
-          'PAYDUNYA-MASTER-KEY': process.env.PAYDUNYA_MASTER_KEY?.trim(),
-          'PAYDUNYA-PUBLIC-KEY': process.env.PAYDUNYA_PUBLIC_KEY?.trim(),
-          'PAYDUNYA-PRIVATE-KEY': process.env.PAYDUNYA_PRIVATE_KEY?.trim(),
-          'PAYDUNYA-TOKEN': process.env.PAYDUNYA_TOKEN?.trim(),
+          'PAYDUNYA-MASTER-KEY': masterKey,
+          'PAYDUNYA-PUBLIC-KEY': publicKey,
+          'PAYDUNYA-PRIVATE-KEY': privateKey,
+          'PAYDUNYA-TOKEN': token,
           'Content-Type': 'application/json'
         }
       }
     );
 
-    if (response.data.response_code === '00') {
+    if (response.data && response.data.response_code === '00') {
       return res.json({ paymentUrl: response.data.response_text });
     } else {
       console.error('Erreur PayDunya Response:', response.data);
-      return res.status(400).json({ error: response.data.response_text || 'Erreur PayDunya' });
+      return res.status(400).json({ error: response.data?.response_text || 'Erreur PayDunya' });
     }
   } catch (error) {
     console.error('Erreur PayDunya Catch:', error.response?.data || error.message);
-    return res.status(500).json({ error: 'Échec de connexion PayDunya', details: error.response?.data || error.message });
+    return res.status(500).json({ 
+      error: 'Échec de connexion PayDunya', 
+      details: typeof error.response?.data === 'string' ? 'Page d\'erreur PayDunya (Clés invalides ou compte non activé)' : error.response?.data || error.message 
+    });
   }
 });
 
