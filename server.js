@@ -26,16 +26,19 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
 
     const paydunyaData = {
       invoice: {
-        total_amount: total_amount,
+        total_amount: Number(total_amount) || 1000,
         description: description || 'Paiement AfroClip'
       },
       store: {
         name: 'AfroClip'
+      },
+      actions: {
+        cancel_url: 'https://afroclip-ai-6.v0.build',
+        return_url: 'https://afroclip-ai-6.v0.build'
       }
     };
 
-    // Choix dynamique de l'URL selon le mode
-    const mode = process.env.PAYDUNYA_MODE || 'live';
+    const mode = (process.env.PAYDUNYA_MODE || 'live').trim().toLowerCase();
     const apiUrl = mode === 'live' 
       ? 'https://app.paydunya.com/api/v1/checkout-invoice/create'
       : 'https://app.paydunya.com/sandbox-api/v1/checkout-invoice/create';
@@ -45,17 +48,16 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
       paydunyaData,
       {
         headers: {
-          'PAYDUNYA-MASTER-KEY': process.env.PAYDUNYA_MASTER_KEY,
-          'PAYDUNYA-PUBLIC-KEY': process.env.PAYDUNYA_PUBLIC_KEY,
-          'PAYDUNYA-PRIVATE-KEY': process.env.PAYDUNYA_PRIVATE_KEY,
-          'PAYDUNYA-TOKEN': process.env.PAYDUNYA_TOKEN,
+          'PAYDUNYA-MASTER-KEY': process.env.PAYDUNYA_MASTER_KEY?.trim(),
+          'PAYDUNYA-PUBLIC-KEY': process.env.PAYDUNYA_PUBLIC_KEY?.trim(),
+          'PAYDUNYA-PRIVATE-KEY': process.env.PAYDUNYA_PRIVATE_KEY?.trim(),
+          'PAYDUNYA-TOKEN': process.env.PAYDUNYA_TOKEN?.trim(),
           'Content-Type': 'application/json'
         }
       }
     );
 
     if (response.data.response_code === '00') {
-      // Renvoie l'URL de paiement officielle générée par PayDunya
       return res.json({ paymentUrl: response.data.response_text });
     } else {
       console.error('Erreur PayDunya Response:', response.data);
