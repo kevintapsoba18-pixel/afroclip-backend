@@ -8,7 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ROUTE DE DIAGNOSTIC (Demandée par v0)
+// ROUTE DE DIAGNOSTIC
 app.get('/api/paydunya/debug', (req, res) => {
   res.json({
     master: !!process.env.PAYDUNYA_MASTER_KEY,
@@ -17,7 +17,7 @@ app.get('/api/paydunya/debug', (req, res) => {
   });
 });
 
-// ROUTE DE CRÉATION DE PAIEMENT PAYDUNYA (SANDBOX)
+// ROUTE DE CRÉATION DE PAIEMENT PAYDUNYA (PRODUCTION LIVE)
 app.post('/api/paydunya/create-invoice', async (req, res) => {
   try {
     const { total_amount, description } = req.body;
@@ -33,13 +33,14 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
     };
 
     const response = await axios.post(
-      'https://app.paydunya.com/sandbox-api/v1/checkout-invoice/create',
+      'https://app.paydunya.com/api/v1/checkout-invoice/create',
       paydunyaData,
       {
         headers: {
           'PAYDUNYA-MASTER-KEY': process.env.PAYDUNYA_MASTER_KEY,
           'PAYDUNYA-PRIVATE-KEY': process.env.PAYDUNYA_PRIVATE_KEY,
           'PAYDUNYA-TOKEN': process.env.PAYDUNYA_TOKEN,
+          'PAYDUNYA-MODE': 'live',
           'Content-Type': 'application/json'
         }
       }
