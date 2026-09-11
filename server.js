@@ -12,8 +12,10 @@ app.use(express.json());
 app.get('/api/paydunya/debug', (req, res) => {
   res.json({
     master: !!process.env.PAYDUNYA_MASTER_KEY,
+    public: !!process.env.PAYDUNYA_PUBLIC_KEY,
     private: !!process.env.PAYDUNYA_PRIVATE_KEY,
-    token: !!process.env.PAYDUNYA_TOKEN
+    token: !!process.env.PAYDUNYA_TOKEN,
+    mode: process.env.PAYDUNYA_MODE || 'live'
   });
 });
 
@@ -32,21 +34,28 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
       }
     };
 
+    // Choix dynamique de l'URL selon le mode
+    const mode = process.env.PAYDUNYA_MODE || 'live';
+    const apiUrl = mode === 'live' 
+      ? 'https://app.paydunya.com/api/v1/checkout-invoice/create'
+      : 'https://app.paydunya.com/sandbox-api/v1/checkout-invoice/create';
+
     const response = await axios.post(
-      'https://app.paydunya.com/api/v1/checkout-invoice/create',
+      apiUrl,
       paydunyaData,
       {
         headers: {
           'PAYDUNYA-MASTER-KEY': process.env.PAYDUNYA_MASTER_KEY,
+          'PAYDUNYA-PUBLIC-KEY': process.env.PAYDUNYA_PUBLIC_KEY,
           'PAYDUNYA-PRIVATE-KEY': process.env.PAYDUNYA_PRIVATE_KEY,
           'PAYDUNYA-TOKEN': process.env.PAYDUNYA_TOKEN,
-          'PAYDUNYA-MODE': 'live',
           'Content-Type': 'application/json'
         }
       }
     );
 
     if (response.data.response_code === '00') {
+      // Renvoie l'URL de paiement officielle générée par PayDunya
       return res.json({ paymentUrl: response.data.response_text });
     } else {
       console.error('Erreur PayDunya Response:', response.data);
@@ -54,7 +63,7 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
     }
   } catch (error) {
     console.error('Erreur PayDunya Catch:', error.response?.data || error.message);
-    return res.status(500).json({ error: 'Échec de connexion PayDunya' });
+    return res.status(500).json({ error: 'Échec de connexion PayDunya', details: error.response?.data || error.message });
   }
 });
 
