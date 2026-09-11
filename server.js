@@ -1,48 +1,31 @@
 const express = require('express');
-const cors = require('cors');
 const axios = require('axios');
+const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-// 1. ROUTE EXTRACTION VIDÉO (SUPADATA)
-app.post('/api/download', async (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'URL manquante' });
-
-  try {
-    const response = await axios.get(`https://api.supadata.ai/v1/youtube/download?url=${encodeURIComponent(url)}`, {
-      headers: {
-        'x-api-key': process.env.SUPADATA_API_KEY
-      }
-    });
-
-    if (response.data && response.data.downloadUrl) {
-      return res.json({ clipUrl: response.data.downloadUrl });
-    } else {
-      return res.status(500).json({ error: 'Impossible de récupérer le lien de la vidéo' });
-    }
-  } catch (error) {
-    console.error('Erreur Supadata:', error.response?.data || error.message);
-    return res.status(500).json({ error: 'Échec du traitement vidéo' });
-  }
-});
-
-// 2. ROUTE CRÉATION PAIEMENT PAYDUNYA
+// 1. ROUTE DE CRÉATION DE PAIEMENT PAYDUNYA
 app.post('/api/paydunya/create-invoice', async (req, res) => {
-  const { amount, planName } = req.body;
-
   try {
+    const { total_amount, description } = req.body;
+
+    const paydunyaData = {
+      invoice: {
+        total_amount: total_amount,
+        description: description || 'Paiement AfroClip'
+      },
+      store: {
+        name: 'AfroClip'
+      }
+    };
+
     const response = await axios.post(
       'https://app.paydunya.com/api/v1/checkout-invoice/create',
-      {
-        invoice: {
-          total_amount: amount,
-          description: `Abonnement AfroClip.ai - Plan ${planName}`
-        },
-        store: { name: "AfroClip.ai" }
-      },
+      paydunyaData,
       {
         headers: {
           'PAYDUNYA-MASTER-KEY': process.env.PAYDUNYA_MASTER_KEY,
@@ -56,7 +39,7 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
     if (response.data.response_code === '00') {
       return res.json({ paymentUrl: response.data.response_text });
     } else {
-      return res.status(400).json({ error: 'Erreur lors de la création de la facture' });
+      return res.status(400).json({ error: 'Erreur lors de la création de la facture PayDunya' });
     }
   } catch (error) {
     console.error('Erreur PayDunya:', error.response?.data || error.message);
@@ -64,11 +47,27 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
   }
 });
 
-// 3. ROUTE IPN PAYDUNYA (CONFIRMATION)
-app.post('/api/paydunya/ipn', (req, res) => {
-  console.log('Notification de paiement PayDunya :', req.body);
-  res.status(200).send('IPN OK');
+// 2. ROUTE IPN PAYDUNYA (CONFIRMATION PAIEMENT)
+app.post('/api/paydunya/ipn', async (req, res) => {
+  try {
+    const data = req.body;
+    console.log('Notification IPN reçue :', data);
+
+    // Traitement/validation du statut du paiement ici si nécessaire
+    return res.status(200).send('IPN reçue avec succès');
+  } catch (error) {
+    console.error('Erreur IPN:', error.message);
+    return res.status(500).send('Erreur lors du traitement IPN');
+  }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
+// ROUTE DE TEST / SANTE DU SERVEUR
+app.get('/', (req, res) => {
+  res.send('Serveur AfroClip Backend fonctionnel !');
+});
+
+// DEMARRAGE DU SERVEUR
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Serveur démarré sur le port ${PORT}`);
+});
