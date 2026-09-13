@@ -74,73 +74,61 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
   }
 });
 
-// ROUTE IPN PAYDUNYA (PRODUCTION)
+// ROUTE IPN PAYDUNYA
 app.post('/api/paydunya/ipn', async (req, res) => {
   console.log('--- IPN PAYDUNYA REÇUE (PROD) ---');
-  console.log('Body complet:', JSON.stringify(req.body));
 
   try {
-    const token_invoice = req.body.data?.token || req.body['data[token]'] || req.body.token;
+    const bodyData = req.body.data || req.body;
+    const status = bodyData.status || bodyData.invoice?.status;
 
-    if (token_invoice) {
-      const masterKey = (process.env.PAYDUNYA_MASTER_KEY || '').trim();
-      const publicKey = (process.env.PAYDUNYA_PUBLIC_KEY || '').trim();
-      const privateKey = (process.env.PAYDUNYA_PRIVATE_KEY || '').trim();
-      const token = (process.env.PAYDUNYA_TOKEN || '').trim();
+    if (status === 'completed') {
+      let userId = bodyData.custom_data?.user_id;
 
-      const confirmResponse = await axios.get(
-        `https://app.paydunya.com/api/v1/checkout-invoice/confirm/${token_invoice}`,
-        {
-          headers: {
-            'PAYDUNYA-MASTER-KEY': masterKey,
-            'PAYDUNYA-PUBLIC-KEY': publicKey,
-            'PAYDUNYA-PRIVATE-KEY': privateKey,
-            'PAYDUNYA-TOKEN': token
-          }
+      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        const { createClient } = require('@supabase/supabase-js');
+        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+        // Si aucun userId n'est transmis par PayDunya, prendre le premier utilisateur de la table
+        if (!userId) {
+          const { data: firstUser, error: findErr } = await supabase.from('users').select('id').limit(1).single();
+          if (findErr) console.error('Erreur récupération utilisateur Supabase:', findErr.message);
+          if (firstUser) userId = firstUser.id;
         }
-      );
 
-      const invoiceData = confirmResponse.data;
-      console.log('Confirmation PayDunya:', JSON.stringify(invoiceData));
+        if (userId) {
+          const { data: user, error: userErr } = await supabase
+            .from('users')
+            .select('credits')
+            .eq('id', userId)
+            .single();
 
-      if (invoiceData.status === 'completed') {
-        const customData = invoiceData.custom_data || {};
-        let userId = customData.user_id;
+          if (userErr) console.error('Erreur lecture crédits Supabase:', userErr.message);
 
-        if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-          const { createClient } = require('@supabase/supabase-js');
-          const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+          const currentCredits = user?.credits || 0;
+          const newCredits = currentCredits + 10;
 
-          // Si l'IPN ne contient pas d'user_id, cibler le compte principal
-          if (!userId) {
-            const { data: firstUser } = await supabase.from('users').select('id').limit(1).single();
-            if (firstUser) userId = firstUser.id;
-          }
+          const { error: updateErr } = await supabase
+            .from('users')
+            .update({ credits: newCredits })
+            .eq('id', userId);
 
-          if (userId) {
-            const { data: user } = await supabase
-              .from('users')
-              .select('credits')
-              .eq('id', userId)
-              .single();
-
-            const currentCredits = user?.credits || 0;
-            const newCredits = currentCredits + 10;
-
-            await supabase
-              .from('users')
-              .update({ credits: newCredits })
-              .eq('id', userId);
-
+          if (updateErr) {
+            console.error('Erreur mise à jour crédits Supabase:', updateErr.message);
+          } else {
             console.log(`SUCCÈS PROD : 10 crédits ajoutés à ${userId}. Nouveau total : ${newCredits}`);
           }
+        } else {
+          console.error('Aucun utilisateur trouvé dans Supabase pour attribuer les crédits.');
         }
+      } else {
+        console.error('Variables d environnement SUPABASE manquantes !');
       }
     }
 
     return res.status(200).send('IPN reçue avec succès');
   } catch (error) {
-    console.error('Erreur traitement IPN PROD:', error.response?.data || error.message);
+    console.error('Erreur traitement IPN PROD:', error.message);
     return res.status(200).send('OK (erreur interceptée)');
   }
 });
