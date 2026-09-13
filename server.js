@@ -38,7 +38,7 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
       },
       actions: {
         cancel_url: 'https://afroclip-ai-6.v0.build',
-        return_url: 'https://afroclip-ai-6.v0.build'
+        return_url: 'https://afroclip-ai-6.v0.build/success'
       },
       custom_data: custom_data || {}
     };
