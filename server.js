@@ -1,7 +1,6 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
@@ -10,11 +9,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Client Supabase
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 // ROUTE DE DIAGNOSTIC
 app.get('/api/paydunya/debug', (req, res) => {
   res.json({
@@ -22,8 +16,8 @@ app.get('/api/paydunya/debug', (req, res) => {
     public: !!process.env.PAYDUNYA_PUBLIC_KEY,
     private: !!process.env.PAYDUNYA_PRIVATE_KEY,
     token: !!process.env.PAYDUNYA_TOKEN,
-    supabaseUrl: !!supabaseUrl,
-    supabaseKey: !!supabaseKey,
+    supabaseUrl: !!process.env.SUPABASE_URL,
+    supabaseKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     mode: process.env.PAYDUNYA_MODE || 'live'
   });
 });
@@ -83,7 +77,7 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
   }
 });
 
-// ROUTE IPN PAYDUNYA (AVEC INJECTION AUTOMATIQUE DES CRÉDITS)
+// ROUTE IPN PAYDUNYA
 app.post('/api/paydunya/ipn', async (req, res) => {
   try {
     const token_invoice = req.body.data?.token || req.body['data[token]'] || req.body.token;
@@ -114,32 +108,29 @@ app.post('/api/paydunya/ipn', async (req, res) => {
 
         console.log('Paiement Validé ! ID Utilisateur :', userId);
 
-        if (userId) {
-          // 1. Recherche du solde actuel de l'utilisateur
-          const { data: user, error: fetchError } = await supabase
-            .from('users')
-            .select('credits')
-            .eq('id', userId)
-            .single();
+        if (userId && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          try {
+            const { createClient } = require('@supabase/supabase-js');
+            const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-          if (fetchError) {
-            console.error('Erreur récupération utilisateur :', fetchError);
-          } else {
+            const { data: user } = await supabase
+              .from('users')
+              .select('credits')
+              .eq('id', userId)
+              .single();
+
             const currentCredits = user?.credits || 0;
             const creditsToAdd = 10;
             const newCredits = currentCredits + creditsToAdd;
 
-            // 2. Mettre à jour les crédits
-            const { error: updateError } = await supabase
+            await supabase
               .from('users')
               .update({ credits: newCredits })
               .eq('id', userId);
 
-            if (updateError) {
-              console.error('Erreur mise à jour des crédits :', updateError);
-            } else {
-              console.log(`SUCCÈS : ${creditsToAdd} crédits ajoutés à l'utilisateur ${userId}. Nouveaux crédits : ${newCredits}`);
-            }
+            console.log(`SUCCÈS : ${creditsToAdd} crédits ajoutés à ${userId}. Total : ${newCredits}`);
+          } catch (supaErr) {
+            console.error('Erreur Supabase lors de l IPN :', supaErr.message);
           }
         }
       }
