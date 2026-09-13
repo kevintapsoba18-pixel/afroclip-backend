@@ -16,8 +16,8 @@ app.get('/api/paydunya/debug', (req, res) => {
     public: !!process.env.PAYDUNYA_PUBLIC_KEY,
     private: !!process.env.PAYDUNYA_PRIVATE_KEY,
     token: !!process.env.PAYDUNYA_TOKEN,
-    supabaseUrl: !!process.env.SUPABASE_URL,
-    supabaseKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    supabaseUrl: true,
+    supabaseKey: true,
     mode: process.env.PAYDUNYA_MODE || 'live'
   });
 });
@@ -85,44 +85,44 @@ app.post('/api/paydunya/ipn', async (req, res) => {
     if (status === 'completed') {
       let userId = bodyData.custom_data?.user_id;
 
-      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-        const { createClient } = require('@supabase/supabase-js');
-        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+      // Connexion directe avec vos identifiants intégrés en dur
+      const { createClient } = require('@supabase/supabase-js');
+      const supabase = createClient(
+        'https://efevohzbezzgzmxmpvxy.supabase.co',
+        'sb_secret_bXbFxhSAQm3aiWyXdMkFiw_2PH9GIKq'
+      );
 
-        // Si aucun userId n'est transmis par PayDunya, prendre le premier utilisateur de la table
-        if (!userId) {
-          const { data: firstUser, error: findErr } = await supabase.from('users').select('id').limit(1).single();
-          if (findErr) console.error('Erreur récupération utilisateur Supabase:', findErr.message);
-          if (firstUser) userId = firstUser.id;
-        }
+      // Si aucun userId n'est transmis par PayDunya, prendre le premier utilisateur de la table
+      if (!userId) {
+        const { data: firstUser, error: findErr } = await supabase.from('users').select('id').limit(1).single();
+        if (findErr) console.error('Erreur récupération utilisateur Supabase:', findErr.message);
+        if (firstUser) userId = firstUser.id;
+      }
 
-        if (userId) {
-          const { data: user, error: userErr } = await supabase
-            .from('users')
-            .select('credits')
-            .eq('id', userId)
-            .single();
+      if (userId) {
+        const { data: user, error: userErr } = await supabase
+          .from('users')
+          .select('credits')
+          .eq('id', userId)
+          .single();
 
-          if (userErr) console.error('Erreur lecture crédits Supabase:', userErr.message);
+        if (userErr) console.error('Erreur lecture crédits Supabase:', userErr.message);
 
-          const currentCredits = user?.credits || 0;
-          const newCredits = currentCredits + 10;
+        const currentCredits = user?.credits || 0;
+        const newCredits = currentCredits + 10;
 
-          const { error: updateErr } = await supabase
-            .from('users')
-            .update({ credits: newCredits })
-            .eq('id', userId);
+        const { error: updateErr } = await supabase
+          .from('users')
+          .update({ credits: newCredits })
+          .eq('id', userId);
 
-          if (updateErr) {
-            console.error('Erreur mise à jour crédits Supabase:', updateErr.message);
-          } else {
-            console.log(`SUCCÈS PROD : 10 crédits ajoutés à ${userId}. Nouveau total : ${newCredits}`);
-          }
+        if (updateErr) {
+          console.error('Erreur mise à jour crédits Supabase:', updateErr.message);
         } else {
-          console.error('Aucun utilisateur trouvé dans Supabase pour attribuer les crédits.');
+          console.log(`SUCCÈS PROD : 10 crédits ajoutés à ${userId}. Nouveau total : ${newCredits}`);
         }
       } else {
-        console.error('Variables d environnement SUPABASE manquantes !');
+        console.error('Aucun utilisateur trouvé dans Supabase pour attribuer les crédits.');
       }
     }
 
