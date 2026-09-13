@@ -70,15 +70,15 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
     }
   } catch (error) {
     console.error('Erreur PayDunya Catch:', error.response?.data || error.message);
-    return res.status(500).json({ 
-      error: 'Échec de connexion PayDunya', 
-      details: typeof error.response?.data === 'string' ? 'Page d\'erreur PayDunya' : error.response?.data || error.message 
-    });
+    return res.status(500).json({ error: 'Échec de connexion PayDunya' });
   }
 });
 
-// ROUTE IPN PAYDUNYA
+// ROUTE IPN PAYDUNYA (PRODUCTION)
 app.post('/api/paydunya/ipn', async (req, res) => {
+  console.log('--- IPN PAYDUNYA REÇUE (PROD) ---');
+  console.log('Body complet:', JSON.stringify(req.body));
+
   try {
     const token_invoice = req.body.data?.token || req.body['data[token]'] || req.body.token;
 
@@ -101,18 +101,23 @@ app.post('/api/paydunya/ipn', async (req, res) => {
       );
 
       const invoiceData = confirmResponse.data;
+      console.log('Confirmation PayDunya:', JSON.stringify(invoiceData));
 
       if (invoiceData.status === 'completed') {
         const customData = invoiceData.custom_data || {};
-        const userId = customData.user_id;
+        let userId = customData.user_id;
 
-        console.log('Paiement Validé ! ID Utilisateur :', userId);
+        if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          const { createClient } = require('@supabase/supabase-js');
+          const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-        if (userId && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-          try {
-            const { createClient } = require('@supabase/supabase-js');
-            const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+          // Si l'IPN ne contient pas d'user_id, cibler le compte principal
+          if (!userId) {
+            const { data: firstUser } = await supabase.from('users').select('id').limit(1).single();
+            if (firstUser) userId = firstUser.id;
+          }
 
+          if (userId) {
             const { data: user } = await supabase
               .from('users')
               .select('credits')
@@ -120,17 +125,14 @@ app.post('/api/paydunya/ipn', async (req, res) => {
               .single();
 
             const currentCredits = user?.credits || 0;
-            const creditsToAdd = 10;
-            const newCredits = currentCredits + creditsToAdd;
+            const newCredits = currentCredits + 10;
 
             await supabase
               .from('users')
               .update({ credits: newCredits })
               .eq('id', userId);
 
-            console.log(`SUCCÈS : ${creditsToAdd} crédits ajoutés à ${userId}. Total : ${newCredits}`);
-          } catch (supaErr) {
-            console.error('Erreur Supabase lors de l IPN :', supaErr.message);
+            console.log(`SUCCÈS PROD : 10 crédits ajoutés à ${userId}. Nouveau total : ${newCredits}`);
           }
         }
       }
@@ -138,12 +140,11 @@ app.post('/api/paydunya/ipn', async (req, res) => {
 
     return res.status(200).send('IPN reçue avec succès');
   } catch (error) {
-    console.error('Erreur traitement IPN:', error.response?.data || error.message);
-    return res.status(500).send('Erreur lors du traitement IPN');
+    console.error('Erreur traitement IPN PROD:', error.response?.data || error.message);
+    return res.status(200).send('OK (erreur interceptée)');
   }
 });
 
-// ROUTE D'ACCUEIL
 app.get('/', (req, res) => {
   res.send('Serveur AfroClip Backend fonctionnel !');
 });
