@@ -1,14 +1,19 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
-// PERMET DE LIRE LES DONNÉES ENVOYÉES PAR PAYDUNYA
 app.use(express.urlencoded({ extended: true }));
+
+// Client Supabase
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ROUTE DE DIAGNOSTIC
 app.get('/api/paydunya/debug', (req, res) => {
@@ -17,11 +22,13 @@ app.get('/api/paydunya/debug', (req, res) => {
     public: !!process.env.PAYDUNYA_PUBLIC_KEY,
     private: !!process.env.PAYDUNYA_PRIVATE_KEY,
     token: !!process.env.PAYDUNYA_TOKEN,
+    supabaseUrl: !!supabaseUrl,
+    supabaseKey: !!supabaseKey,
     mode: process.env.PAYDUNYA_MODE || 'live'
   });
 });
 
-// ROUTE DE CRÉATION DE PAIEMENT PAYDUNYA (PRODUCTION LIVE)
+// ROUTE DE CRÉATION DE PAIEMENT PAYDUNYA
 app.post('/api/paydunya/create-invoice', async (req, res) => {
   try {
     const { total_amount, description, custom_data } = req.body;
@@ -33,14 +40,12 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
       },
       store: {
         name: 'AfroClip',
-        // Spécification explicite de l'URL IPN à PayDunya
         callback_url: 'https://afroclip-backend-production.up.railway.app/api/paydunya/ipn'
       },
       actions: {
         cancel_url: 'https://afroclip-ai-6.v0.build',
         return_url: 'https://afroclip-ai-6.v0.build'
       },
-      // Transmission de custom_data (user_id) si présent
       custom_data: custom_data || {}
     };
 
@@ -78,12 +83,9 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
   }
 });
 
-// ROUTE IPN PAYDUNYA
+// ROUTE IPN PAYDUNYA (AVEC INJECTION AUTOMATIQUE DES CRÉDITS)
 app.post('/api/paydunya/ipn', async (req, res) => {
   try {
-    console.log('Notification IPN brute reçue :', req.body);
-
-    // Extraction du token du paiement envoyé par PayDunya
     const token_invoice = req.body.data?.token || req.body['data[token]'] || req.body.token;
 
     if (token_invoice) {
@@ -92,7 +94,6 @@ app.post('/api/paydunya/ipn', async (req, res) => {
       const privateKey = (process.env.PAYDUNYA_PRIVATE_KEY || '').trim();
       const token = (process.env.PAYDUNYA_TOKEN || '').trim();
 
-      // Vérification directe auprès de PayDunya du statut de la facture
       const confirmResponse = await axios.get(
         `https://app.paydunya.com/api/v1/checkout-invoice/confirm/${token_invoice}`,
         {
@@ -106,13 +107,41 @@ app.post('/api/paydunya/ipn', async (req, res) => {
       );
 
       const invoiceData = confirmResponse.data;
-      console.log('Données de confirmation PayDunya :', invoiceData);
 
       if (invoiceData.status === 'completed') {
         const customData = invoiceData.custom_data || {};
-        console.log('Paiement Réussi ! Données utilisateur :', customData);
-        
-        // TODO: Insérer ici l'appel BDD pour créditer les tokens de customData.user_id
+        const userId = customData.user_id;
+
+        console.log('Paiement Validé ! ID Utilisateur :', userId);
+
+        if (userId) {
+          // 1. Recherche du solde actuel de l'utilisateur
+          const { data: user, error: fetchError } = await supabase
+            .from('users')
+            .select('credits')
+            .eq('id', userId)
+            .single();
+
+          if (fetchError) {
+            console.error('Erreur récupération utilisateur :', fetchError);
+          } else {
+            const currentCredits = user?.credits || 0;
+            const creditsToAdd = 10;
+            const newCredits = currentCredits + creditsToAdd;
+
+            // 2. Mettre à jour les crédits
+            const { error: updateError } = await supabase
+              .from('users')
+              .update({ credits: newCredits })
+              .eq('id', userId);
+
+            if (updateError) {
+              console.error('Erreur mise à jour des crédits :', updateError);
+            } else {
+              console.log(`SUCCÈS : ${creditsToAdd} crédits ajoutés à l'utilisateur ${userId}. Nouveaux crédits : ${newCredits}`);
+            }
+          }
+        }
       }
     }
 
