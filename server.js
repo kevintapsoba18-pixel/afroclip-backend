@@ -92,34 +92,36 @@ app.post('/api/paydunya/ipn', async (req, res) => {
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmZXZvaHpiZXp6Z3pteG1wdnh5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODk2Nzk2OCwiZXhwIjoyMTA0NTQzOTY4fQ.cGfPLyVPaRV0rycwLqjcGbFbVC5tYXcH0K6aXZlQ1-E'
       );
 
-      // Si aucun userId n'est transmis par PayDunya, prendre le premier utilisateur de la table
+      // Si aucun userId n'est transmis par PayDunya, utiliser maybeSingle pour éviter le crash si la table est vide
       if (!userId) {
-        const { data: firstUser, error: findErr } = await supabase.from('users').select('id').limit(1).single();
+        const { data: firstUser, error: findErr } = await supabase.from('users').select('id').limit(1).maybeSingle();
         if (findErr) console.error('Erreur récupération utilisateur Supabase:', findErr.message);
         if (firstUser) userId = firstUser.id;
       }
 
       if (userId) {
+        const cleanUserId = String(userId);
+
         const { data: user, error: userErr } = await supabase
           .from('users')
           .select('credits')
-          .eq('id', userId)
-          .single();
+          .eq('id', cleanUserId)
+          .maybeSingle();
 
         if (userErr) console.error('Erreur lecture crédits Supabase:', userErr.message);
 
         const currentCredits = user?.credits || 0;
         const newCredits = currentCredits + 10;
 
-        const { error: updateErr } = await supabase
+        // Si l'utilisateur n'existe pas encore dans la table, on l'insère, sinon on met à jour
+        const { error: upsertErr } = await supabase
           .from('users')
-          .update({ credits: newCredits })
-          .eq('id', userId);
+          .upsert({ id: cleanUserId, credits: newCredits }, { onConflict: 'id' });
 
-        if (updateErr) {
-          console.error('Erreur mise à jour crédits Supabase:', updateErr.message);
+        if (upsertErr) {
+          console.error('Erreur mise à jour/insertion crédits Supabase:', upsertErr.message);
         } else {
-          console.log(`SUCCÈS PROD : 10 crédits ajoutés à ${userId}. Nouveau total : ${newCredits}`);
+          console.log(`SUCCÈS PROD : 10 crédits ajoutés à ${cleanUserId}. Nouveau total : ${newCredits}`);
         }
       } else {
         console.error('Aucun utilisateur trouvé dans Supabase pour attribuer les crédits.');
