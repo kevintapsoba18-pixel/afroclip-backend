@@ -85,11 +85,11 @@ app.post('/api/paydunya/ipn', async (req, res) => {
     if (status === 'completed') {
       let userId = bodyData.custom_data?.user_id;
 
-      // Connexion directe avec vos identifiants intégrés en dur
+      // Connexion directe avec la clé service_role correcte
       const { createClient } = require('@supabase/supabase-js');
       const supabase = createClient(
         'https://efevohzbezzgzmxmpvxy.supabase.co',
-        'sb_secret_bXbFxhSAQm3aiWyXdMkFiw_2PH9GIKq'
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmZXZvaHpiZXp6Z3pteG1wdnh5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODk2Nzk2OCwiZXhwIjoyMTA0NTQzOTY4fQ.cGfPLyVPaRV0rycwLqjcGbFbVC5tYXcH0K6aXZlQ1-E'
       );
 
       // Si aucun userId n'est transmis par PayDunya, prendre le premier utilisateur de la table
