@@ -86,11 +86,12 @@ app.post('/api/paydunya/ipn', async (req, res) => {
       let userId = bodyData.custom_data?.user_id;
 
       // Connexion directe avec la clé service_role correcte
-      const { createClient } = require('@supabase/supabase-js');
-      const supabase = createClient(
-        'https://efevohzbezzgzmxmpvxy.supabase.co',
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmZXZvaHpiZXp6Z3pteG1wdnh5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODk2Nzk2OCwiZXhwIjoyMTA0NTQzOTY4fQ.cGfPLyVPaRV0rycwLqjcGbFbVC5tYXcH0K6aXZlQ1-E'
-      );
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
 
       // Si aucun userId n'est transmis par PayDunya, utiliser maybeSingle pour éviter le crash si la table est vide
       if (!userId) {
