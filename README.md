@@ -1,1 +1,0 @@
-# afroclip-backend
