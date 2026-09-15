@@ -23,7 +23,21 @@ if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'shorts';
 const MAX_CLIPS = 5;
-const CLIP_DURATION_SEC = 50; // durée approximative de chaque short
+const ALLOWED_DURATIONS = [15, 30, 60];
+const DEFAULT_DURATION = 30;
+
+const WHISPER_BIN = process.env.WHISPER_BIN || 'whisper-cli';
+const WHISPER_MODEL = process.env.WHISPER_MODEL || '/opt/whisper.cpp/models/ggml-base.bin';
+const WHISPER_LANG = process.env.WHISPER_LANG || 'fr';
+
+// Styles de sous-titres proposés dans l'interface
+const SUBTITLE_STYLES = {
+  karaoke:      { label: 'Karaoké',    color: '#FFD400', outline: '#000000', outlineWidth: 3 },
+  neon:         { label: 'Néon',       color: '#B15DFF', outline: '#B15DFF', outlineWidth: 5 },
+  'gras-blanc': { label: 'Gras Blanc', color: '#FFFFFF', outline: '#000000', outlineWidth: 3 },
+  'pop-orange': { label: 'Pop Orange', color: '#FF7A00', outline: '#000000', outlineWidth: 3 }
+};
+const DEFAULT_SUBTITLE_STYLE = 'gras-blanc';
 
 // Si des cookies YouTube sont fournis (pour éviter le blocage anti-bot
 // de YouTube sur les IP de serveurs cloud), on les écrit sur disque au
@@ -54,7 +68,6 @@ const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_
 // status: pending | downloading | analyzing | processing | uploading | done | error
 const jobs = {};
 
-// Nettoyage des jobs de plus de 2h pour éviter une fuite mémoire
 setInterval(() => {
   const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
   for (const id in jobs) {
@@ -67,7 +80,7 @@ function updateJob(jobId, patch) {
 }
 
 // ============================================================
-// HELPERS
+// HELPERS GÉNÉRAUX
 // ============================================================
 function runCommand(cmd, args) {
   return new Promise((resolve, reject) => {
@@ -76,7 +89,7 @@ function runCommand(cmd, args) {
     let stderr = '';
     proc.stdout.on('data', (d) => (stdout += d.toString()));
     proc.stderr.on('data', (d) => (stderr += d.toString()));
-    proc.on('error', reject); // ex: binaire introuvable
+    proc.on('error', reject);
     proc.on('close', (code) => {
       if (code === 0) resolve(stdout);
       else reject(new Error(`${cmd} a échoué (code ${code}): ${stderr.slice(-2000)}`));
@@ -99,24 +112,33 @@ async function getDuration(filePath) {
   return parseFloat(parsed.format.duration);
 }
 
-function computeClipWindows(duration) {
+function computeClipWindows(duration, clipLength) {
   // MVP : on répartit des segments de longueur fixe sur toute la vidéo.
   // La sélection "intelligente" des meilleurs moments (via IA) est une
   // amélioration prévue en V2 - pour l'instant c'est un échantillonnage
   // régulier qui couvre le début, le milieu et la fin.
-  if (duration <= CLIP_DURATION_SEC + 5) {
+  if (duration <= clipLength + 5) {
     return [{ start: 0, length: Math.max(5, Math.floor(duration)) }];
   }
-  const numClips = Math.min(MAX_CLIPS, Math.max(1, Math.floor(duration / 45)));
-  const usable = Math.max(duration - CLIP_DURATION_SEC, 1);
+  const numClips = Math.min(MAX_CLIPS, Math.max(1, Math.floor(duration / (clipLength * 1.3))));
+  const usable = Math.max(duration - clipLength, 1);
   const spacing = usable / numClips;
   const windows = [];
   for (let i = 0; i < numClips; i++) {
-    windows.push({ start: Math.round(i * spacing), length: CLIP_DURATION_SEC });
+    windows.push({ start: Math.round(i * spacing), length: clipLength });
   }
   return windows;
 }
 
+function cleanupFiles(paths) {
+  for (const p of paths) {
+    fs.promises.unlink(p).catch(() => {});
+  }
+}
+
+// ============================================================
+// TÉLÉCHARGEMENT + DÉCOUPAGE
+// ============================================================
 async function downloadVideo(youtubeUrl, outputPath) {
   const args = [
     '-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
@@ -130,14 +152,12 @@ async function downloadVideo(youtubeUrl, outputPath) {
 }
 
 async function cutVerticalClip(sourcePath, outputPath, start, length) {
-  // Recadre en 9:16 (1080x1920) centré. Si la vidéo source est plus
-  // étroite que 1080 en hauteur équivalente, ffmpeg complète en noir.
   await runCommand('ffmpeg', [
     '-y',
     '-ss', String(start),
     '-i', sourcePath,
     '-t', String(length),
-    '-vf', "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+    '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -147,6 +167,119 @@ async function cutVerticalClip(sourcePath, outputPath, start, length) {
   ]);
 }
 
+// ============================================================
+// TRANSCRIPTION (whisper.cpp local, gratuit) + SOUS-TITRES
+// ============================================================
+async function extractAudioForWhisper(videoPath, audioPath) {
+  // whisper.cpp attend du WAV mono 16kHz
+  await runCommand('ffmpeg', [
+    '-y', '-i', videoPath,
+    '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+    audioPath
+  ]);
+}
+
+async function transcribeWordByWord(audioPath, outBase) {
+  // -ml 1 force des segments d'un seul mot => sous-titres mot par mot
+  // (style "pop captions" façon TikTok), avec la timestamp de chaque mot.
+  await runCommand(WHISPER_BIN, [
+    '-m', WHISPER_MODEL,
+    '-f', audioPath,
+    '-osrt',
+    '-of', outBase,
+    '-ml', '1',
+    '-l', WHISPER_LANG
+  ]);
+  return `${outBase}.srt`;
+}
+
+function srtTimeToSeconds(t) {
+  const [h, m, rest] = t.split(':');
+  const [s, ms] = rest.split(',');
+  return (+h) * 3600 + (+m) * 60 + (+s) + (+ms) / 1000;
+}
+
+function parseSrt(content) {
+  const blocks = content.trim().split(/\r?\n\r?\n/);
+  const cues = [];
+  for (const block of blocks) {
+    const lines = block.split(/\r?\n/).filter(Boolean);
+    const timeLine = lines.find((l) => l.includes('-->'));
+    if (!timeLine) continue;
+    const [startStr, endStr] = timeLine.split('-->').map((s) => s.trim());
+    const text = lines.slice(lines.indexOf(timeLine) + 1).join(' ').trim();
+    if (!text) continue;
+    cues.push({
+      start: srtTimeToSeconds(startStr),
+      end: srtTimeToSeconds(endStr),
+      text
+    });
+  }
+  return cues;
+}
+
+function secondsToAssTime(t) {
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = Math.floor(t % 60);
+  const cs = Math.round((t - Math.floor(t)) * 100);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${h}:${pad(m)}:${pad(s)}.${pad(cs)}`;
+}
+
+function rgbToAssColor(hex) {
+  const c = hex.replace('#', '');
+  const r = c.slice(0, 2);
+  const g = c.slice(2, 4);
+  const b = c.slice(4, 6);
+  return `&H00${b}${g}${r}`.toUpperCase();
+}
+
+function escapeAssText(text) {
+  return text.replace(/[{}]/g, '');
+}
+
+function buildAss(cues, styleKey, videoWidth, videoHeight) {
+  const style = SUBTITLE_STYLES[styleKey] || SUBTITLE_STYLES[DEFAULT_SUBTITLE_STYLE];
+  const primary = rgbToAssColor(style.color);
+  const outline = rgbToAssColor(style.outline);
+
+  const header = `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${videoWidth}
+PlayResY: ${videoHeight}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial Black,84,${primary},${primary},${outline},&H00000000,-1,0,0,0,100,100,0,0,1,${style.outlineWidth},0,2,60,60,220,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  const lines = cues
+    .map((c) => `Dialogue: 0,${secondsToAssTime(c.start)},${secondsToAssTime(c.end)},Default,,0,0,0,,${escapeAssText(c.text)}`)
+    .join('\n');
+
+  return header + lines + '\n';
+}
+
+async function burnSubtitles(inputPath, assPath, outputPath) {
+  // Le filtre "subtitles" de ffmpeg veut un chemin avec les ':' échappés
+  const escapedAssPath = assPath.replace(/:/g, '\\:');
+  await runCommand('ffmpeg', [
+    '-y', '-i', inputPath,
+    '-vf', `subtitles=${escapedAssPath}`,
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+    '-c:a', 'copy',
+    outputPath
+  ]);
+}
+
+// ============================================================
+// UPLOAD
+// ============================================================
 async function uploadClipToSupabase(jobId, index, filePath) {
   if (!supabase) throw new Error('Supabase non configuré (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY manquants)');
   const fileBuffer = fs.readFileSync(filePath);
@@ -162,16 +295,10 @@ async function uploadClipToSupabase(jobId, index, filePath) {
   return data.publicUrl;
 }
 
-function cleanupFiles(paths) {
-  for (const p of paths) {
-    fs.promises.unlink(p).catch(() => {});
-  }
-}
-
 // ============================================================
 // TRAITEMENT PRINCIPAL (asynchrone, en arrière-plan)
 // ============================================================
-async function processVideo(jobId, youtubeUrl) {
+async function processVideo(jobId, youtubeUrl, clipLength, subtitleStyle) {
   const sourcePath = path.join(TMP_DIR, `${jobId}_source.mp4`);
   const tempFiles = [sourcePath];
 
@@ -179,30 +306,53 @@ async function processVideo(jobId, youtubeUrl) {
     updateJob(jobId, { status: 'downloading', progress: 10 });
     await downloadVideo(youtubeUrl, sourcePath);
 
-    updateJob(jobId, { status: 'analyzing', progress: 30 });
+    updateJob(jobId, { status: 'analyzing', progress: 25 });
     const duration = await getDuration(sourcePath);
-    const windows = computeClipWindows(duration);
+    const windows = computeClipWindows(duration, clipLength);
 
-    updateJob(jobId, { status: 'processing', progress: 40 });
-    const clipPaths = [];
+    updateJob(jobId, { status: 'processing', progress: 35 });
+    const finalClipPaths = [];
+
     for (let i = 0; i < windows.length; i++) {
-      const outPath = path.join(TMP_DIR, `${jobId}_clip_${i}.mp4`);
-      await cutVerticalClip(sourcePath, outPath, windows[i].start, windows[i].length);
-      clipPaths.push(outPath);
-      tempFiles.push(outPath);
-      updateJob(jobId, { progress: 40 + Math.round(((i + 1) / windows.length) * 30) });
+      const rawPath = path.join(TMP_DIR, `${jobId}_${i}_raw.mp4`);
+      const audioPath = path.join(TMP_DIR, `${jobId}_${i}.wav`);
+      const srtBase = path.join(TMP_DIR, `${jobId}_${i}`);
+      const assPath = path.join(TMP_DIR, `${jobId}_${i}.ass`);
+      const finalPath = path.join(TMP_DIR, `${jobId}_${i}_final.mp4`);
+      tempFiles.push(rawPath, audioPath, `${srtBase}.srt`, assPath, finalPath);
+
+      // 1. Découpage + recadrage vertical
+      await cutVerticalClip(sourcePath, rawPath, windows[i].start, windows[i].length);
+
+      // 2. Transcription locale (whisper.cpp)
+      await extractAudioForWhisper(rawPath, audioPath);
+      const srtPath = await transcribeWordByWord(audioPath, srtBase);
+      const cues = fs.existsSync(srtPath) ? parseSrt(fs.readFileSync(srtPath, 'utf8')) : [];
+
+      // 3. Génération + incrustation des sous-titres stylés
+      if (cues.length > 0) {
+        fs.writeFileSync(assPath, buildAss(cues, subtitleStyle, 1080, 1920));
+        await burnSubtitles(rawPath, assPath, finalPath);
+      } else {
+        // Pas de parole détectée : on garde le clip tel quel plutôt que d'échouer
+        fs.copyFileSync(rawPath, finalPath);
+      }
+
+      finalClipPaths.push(finalPath);
+      updateJob(jobId, { progress: 35 + Math.round(((i + 1) / windows.length) * 45) });
     }
 
-    updateJob(jobId, { status: 'uploading', progress: 75 });
+    updateJob(jobId, { status: 'uploading', progress: 85 });
     const clips = [];
-    for (let i = 0; i < clipPaths.length; i++) {
-      const url = await uploadClipToSupabase(jobId, i, clipPaths[i]);
+    for (let i = 0; i < finalClipPaths.length; i++) {
+      const url = await uploadClipToSupabase(jobId, i, finalClipPaths[i]);
       clips.push({
         title: `Short ${i + 1}`,
         durationSec: windows[i].length,
+        subtitleStyle,
         url
       });
-      updateJob(jobId, { progress: 75 + Math.round(((i + 1) / clipPaths.length) * 25) });
+      updateJob(jobId, { progress: 85 + Math.round(((i + 1) / finalClipPaths.length) * 15) });
     }
 
     updateJob(jobId, { status: 'done', progress: 100, clips });
@@ -219,10 +369,14 @@ async function processVideo(jobId, youtubeUrl) {
 // ============================================================
 app.post('/api/analyze', (req, res) => {
   const { youtubeUrl } = req.body;
+  let { clipDuration, subtitleStyle } = req.body;
 
   if (!isValidYoutubeUrl(youtubeUrl)) {
     return res.status(400).json({ error: 'Lien YouTube invalide' });
   }
+
+  clipDuration = ALLOWED_DURATIONS.includes(Number(clipDuration)) ? Number(clipDuration) : DEFAULT_DURATION;
+  subtitleStyle = SUBTITLE_STYLES[subtitleStyle] ? subtitleStyle : DEFAULT_SUBTITLE_STYLE;
 
   const jobId = crypto.randomUUID();
   jobs[jobId] = {
@@ -233,10 +387,9 @@ app.post('/api/analyze', (req, res) => {
     createdAt: Date.now()
   };
 
-  // On répond immédiatement, le traitement continue en arrière-plan
   res.json({ jobId });
 
-  processVideo(jobId, youtubeUrl);
+  processVideo(jobId, youtubeUrl, clipDuration, subtitleStyle);
 });
 
 app.get('/api/analyze/:jobId', (req, res) => {
@@ -322,7 +475,7 @@ app.post('/api/paydunya/ipn', async (req, res) => {
       let userId = bodyData.custom_data?.user_id;
 
       if (!supabase) {
-        console.error('Supabase non configuré, impossible de créditer l\'utilisateur');
+        console.error("Supabase non configuré, impossible de créditer l'utilisateur");
         return res.status(200).send('OK (supabase non configuré)');
       }
 
