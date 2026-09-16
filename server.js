@@ -92,8 +92,11 @@ function runCommand(cmd, args) {
     proc.on('error', reject);
     proc.on('close', (code, signal) => {
       if (code === 0) resolve(stdout);
-      else if (signal) reject(new Error(`${cmd} a été tué par le signal ${signal} (probablement un manque de mémoire sur le conteneur): ${stderr.slice(-1000)}`));
-      else reject(new Error(`${cmd} a échoué (code ${code}): ${stderr.slice(-2000)}`));
+      else {
+        const details = `${stderr.slice(-1000)}\n${stdout.slice(-1000)}`.trim();
+        if (signal) reject(new Error(`${cmd} a été tué par le signal ${signal} (probablement un manque de mémoire sur le conteneur): ${details}`));
+        else reject(new Error(`${cmd} a échoué (code ${code}): ${details || '(aucune sortie)'}`));
+      }
     });
   });
 }
