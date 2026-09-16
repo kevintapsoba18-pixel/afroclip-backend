@@ -158,11 +158,11 @@ async function downloadVideo(youtubeUrl, outputPath) {
     '-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
     '--merge-output-format', 'mp4',
     '--no-playlist',
-    '--extractor-args', 'youtube:player_client=android,web',
-    '--js-runtimes', 'node',
+    '--extractor-args', 'youtube:player_client=android',
     '-o', outputPath
   ];
-  if (COOKIES_PATH) args.push('--cookies', COOKIES_PATH);
+  // Le client "android" ne supporte pas les cookies et yt-dlp l'ignore
+  // s'il en détecte — donc on ne les envoie volontairement PAS ici.
   args.push(youtubeUrl);
   await runCommand('yt-dlp', args);
 }
