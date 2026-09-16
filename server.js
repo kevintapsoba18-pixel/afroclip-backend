@@ -158,7 +158,7 @@ async function downloadVideo(youtubeUrl, outputPath) {
     '-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
     '--merge-output-format', 'mp4',
     '--no-playlist',
-    '--js-runtimes', 'node',
+    '--extractor-args', 'youtube:player_client=android,web',
     '-o', outputPath
   ];
   if (COOKIES_PATH) args.push('--cookies', COOKIES_PATH);
