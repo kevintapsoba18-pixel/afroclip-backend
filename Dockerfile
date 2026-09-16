@@ -17,15 +17,15 @@ RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o 
     && chmod a+rx /usr/local/bin/yt-dlp
 
 # whisper.cpp : transcription locale gratuite (sans clé API).
-# Le système de build de whisper.cpp a changé de version en version (Makefile
-# classique vs CMake) : on essaie le Makefile, sinon on bascule sur CMake,
-# puis on repère le binaire produit où qu'il soit et on le symlink à un
-# emplacement fixe pour que server.js n'ait jamais à s'en soucier.
+# IMPORTANT : "make" produit désormais uniquement des scripts factices de
+# dépréciation (qui affichent un avertissement et échouent) pour les anciens
+# noms de binaires — le vrai programme fonctionnel est produit par CMake.
+# On force donc CMake exclusivement, jamais "make".
 RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /opt/whisper.cpp \
     && cd /opt/whisper.cpp \
-    && (make -j"$(nproc)" || (cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j --config Release)) \
-    && BIN=$(find /opt/whisper.cpp -maxdepth 4 -type f -name "whisper-cli" -perm -u+x | head -n1) \
-    && if [ -z "$BIN" ]; then BIN=$(find /opt/whisper.cpp -maxdepth 4 -type f -name "main" -perm -u+x | head -n1); fi \
+    && cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j --config Release \
+    && BIN=$(find /opt/whisper.cpp/build -type f -name "whisper-cli" -perm -u+x | head -n1) \
     && ln -s "$BIN" /usr/local/bin/whisper-cli \
     && bash ./models/download-ggml-model.sh base
 
