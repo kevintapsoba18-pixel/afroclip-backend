@@ -26,7 +26,7 @@ const MAX_CLIPS = 5;
 const ALLOWED_DURATIONS = [15, 30, 60];
 const DEFAULT_DURATION = 30;
 
-const WHISPER_BIN = process.env.WHISPER_BIN || 'whisper-cli';
+const WHISPER_BIN = process.env.WHISPER_BIN || 'whisper-whisper-cli';
 const WHISPER_MODEL = process.env.WHISPER_MODEL || '/opt/whisper.cpp/models/ggml-base.bin';
 const WHISPER_LANG = process.env.WHISPER_LANG || 'fr';
 
