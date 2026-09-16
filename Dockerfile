@@ -20,18 +20,18 @@ RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o 
 # Le système de build de whisper.cpp a changé de version en version (Makefile
 # classique vs CMake) : on essaie le Makefile, sinon on bascule sur CMake,
 # puis on repère le binaire produit (en prenant en compte les nouveaux noms comme whisper-whisper-cli) 
-# et on le symlink à un emplacement fixe pour que server.js n'ait jamais à s'en soucier.
+# et on le symlink vers le nouveau binaire officiel pour que server.js fonctionne sans accroc.
 RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /opt/whisper.cpp \
     && cd /opt/whisper.cpp \
     && (make -j"$(nproc)" || (cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j --config Release)) \
     && BIN=$(find /opt/whisper.cpp -maxdepth 4 -type f \( -name "main" -o -name "whisper-cli" -o -name "whisper-whisper-cli" \) -perm -u+x | head -n1) \
-    && ln -s "$BIN" /usr/local/bin/whisper-cli \
+    && ln -sf "$BIN" /usr/local/bin/whisper-whisper-cli \
     && bash ./models/download-ggml-model.sh base
 
 # Modèle "base" = bon compromis vitesse/qualité en CPU. Pour plus de
 # précision (au prix de plus de temps de calcul), remplace "base" par
 # "small" ci-dessus et dans WHISPER_MODEL ci-dessous.
-ENV WHISPER_BIN=/usr/local/bin/whisper-cli
+ENV WHISPER_BIN=/usr/local/bin/whisper-whisper-cli
 ENV WHISPER_MODEL=/opt/whisper.cpp/models/ggml-base.bin
 ENV WHISPER_LANG=fr
 
