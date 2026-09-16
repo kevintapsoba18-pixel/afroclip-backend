@@ -26,7 +26,7 @@ const MAX_CLIPS = 5;
 const ALLOWED_DURATIONS = [15, 30, 60];
 const DEFAULT_DURATION = 30;
 
-const WHISPER_BIN = process.env.WHISPER_BIN || 'whisper-whisper-whisper-cli';
+const WHISPER_BIN = process.env.WHISPER_BIN || 'whisper-cli';
 const WHISPER_MODEL = process.env.WHISPER_MODEL || '/opt/whisper.cpp/models/ggml-base.bin';
 const WHISPER_LANG = process.env.WHISPER_LANG || 'fr';
 
@@ -39,12 +39,6 @@ const SUBTITLE_STYLES = {
 };
 const DEFAULT_SUBTITLE_STYLE = 'gras-blanc';
 
-// Si des cookies YouTube sont fournis (pour éviter le blocage anti-bot
-// de YouTube sur les IP de serveurs cloud), on les écrit sur disque au
-// démarrage. Pour générer YTDLP_COOKIES_B64 : exporter les cookies
-// youtube.com depuis ton navigateur (extension "Get cookies.txt"),
-// puis `base64 -w0 cookies.txt` et coller le résultat dans la variable
-// d'environnement Railway.
 let COOKIES_PATH = null;
 if (process.env.YTDLP_COOKIES_B64) {
   try {
@@ -64,8 +58,6 @@ const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_
 // ============================================================
 // STOCKAGE DES JOBS EN MÉMOIRE
 // ============================================================
-// jobs[jobId] = { status, progress, error, clips, createdAt }
-// status: pending | downloading | analyzing | processing | uploading | done | error
 const jobs = {};
 
 setInterval(() => {
@@ -117,10 +109,6 @@ async function getDuration(filePath) {
 }
 
 function computeClipWindows(duration, clipLength) {
-  // MVP : on répartit des segments de longueur fixe sur toute la vidéo.
-  // La sélection "intelligente" des meilleurs moments (via IA) est une
-  // amélioration prévue en V2 - pour l'instant c'est un échantillonnage
-  // régulier qui couvre le début, le milieu et la fin.
   if (duration <= clipLength + 5) {
     return [{ start: 0, length: Math.max(5, Math.floor(duration)) }];
   }
@@ -173,10 +161,9 @@ async function cutVerticalClip(sourcePath, outputPath, start, length) {
 }
 
 // ============================================================
-// TRANSCRIPTION (whisper.cpp local, gratuit) + SOUS-TITRES
+// TRANSCRIPTION & SOUS-TITRES
 // ============================================================
 async function extractAudioForWhisper(videoPath, audioPath) {
-  // whisper.cpp attend du WAV mono 16kHz
   await runCommand('ffmpeg', [
     '-y', '-i', videoPath,
     '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
@@ -185,8 +172,6 @@ async function extractAudioForWhisper(videoPath, audioPath) {
 }
 
 async function transcribeWordByWord(audioPath, outBase) {
-  // -ml 1 force des segments d'un seul mot => sous-titres mot par mot
-  // (style "pop captions" façon TikTok), avec la timestamp de chaque mot.
   await runCommand(WHISPER_BIN, [
     '-m', WHISPER_MODEL,
     '-f', audioPath,
@@ -271,7 +256,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 }
 
 async function burnSubtitles(inputPath, assPath, outputPath) {
-  // Le filtre "subtitles" de ffmpeg veut un chemin avec les ':' échappés
   const escapedAssPath = assPath.replace(/:/g, '\\:');
   await runCommand('ffmpeg', [
     '-y', '-i', inputPath,
@@ -286,7 +270,7 @@ async function burnSubtitles(inputPath, assPath, outputPath) {
 // UPLOAD
 // ============================================================
 async function uploadClipToSupabase(jobId, index, filePath) {
-  if (!supabase) throw new Error('Supabase non configuré (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY manquants)');
+  if (!supabase) throw new Error('Supabase non configuré');
   const fileBuffer = fs.readFileSync(filePath);
   const storagePath = `${jobId}/short_${index + 1}.mp4`;
 
@@ -301,7 +285,7 @@ async function uploadClipToSupabase(jobId, index, filePath) {
 }
 
 // ============================================================
-// TRAITEMENT PRINCIPAL (asynchrone, en arrière-plan)
+// TRAITEMENT PRINCIPAL
 // ============================================================
 async function processVideo(jobId, youtubeUrl, clipLength, subtitleStyle) {
   const sourcePath = path.join(TMP_DIR, `${jobId}_source.mp4`);
@@ -326,20 +310,16 @@ async function processVideo(jobId, youtubeUrl, clipLength, subtitleStyle) {
       const finalPath = path.join(TMP_DIR, `${jobId}_${i}_final.mp4`);
       tempFiles.push(rawPath, audioPath, `${srtBase}.srt`, assPath, finalPath);
 
-      // 1. Découpage + recadrage vertical
       await cutVerticalClip(sourcePath, rawPath, windows[i].start, windows[i].length);
 
-      // 2. Transcription locale (whisper.cpp)
       await extractAudioForWhisper(rawPath, audioPath);
       const srtPath = await transcribeWordByWord(audioPath, srtBase);
       const cues = fs.existsSync(srtPath) ? parseSrt(fs.readFileSync(srtPath, 'utf8')) : [];
 
-      // 3. Génération + incrustation des sous-titres stylés
       if (cues.length > 0) {
         fs.writeFileSync(assPath, buildAss(cues, subtitleStyle, 1080, 1920));
         await burnSubtitles(rawPath, assPath, finalPath);
       } else {
-        // Pas de parole détectée : on garde le clip tel quel plutôt que d'échouer
         fs.copyFileSync(rawPath, finalPath);
       }
 
@@ -370,7 +350,7 @@ async function processVideo(jobId, youtubeUrl, clipLength, subtitleStyle) {
 }
 
 // ============================================================
-// ROUTES ANALYSE VIDÉO
+// ROUTES API
 // ============================================================
 app.post('/api/analyze', (req, res) => {
   const { youtubeUrl } = req.body;
@@ -403,9 +383,6 @@ app.get('/api/analyze/:jobId', (req, res) => {
   res.json(job);
 });
 
-// ============================================================
-// ROUTES PAYDUNYA (inchangées)
-// ============================================================
 app.get('/api/paydunya/debug', (req, res) => {
   res.json({
     master: !!process.env.PAYDUNYA_MASTER_KEY,
@@ -460,18 +437,14 @@ app.post('/api/paydunya/create-invoice', async (req, res) => {
     if (response.data && response.data.response_code === '00') {
       return res.json({ paymentUrl: response.data.response_text });
     } else {
-      console.error('Erreur PayDunya Response:', response.data);
       return res.status(400).json({ error: response.data?.response_text || 'Erreur PayDunya' });
     }
   } catch (error) {
-    console.error('Erreur PayDunya Catch:', error.response?.data || error.message);
     return res.status(500).json({ error: 'Échec de connexion PayDunya' });
   }
 });
 
 app.post('/api/paydunya/ipn', async (req, res) => {
-  console.log('--- IPN PAYDUNYA REÇUE (PROD) ---');
-
   try {
     const bodyData = req.body.data || req.body;
     const status = bodyData.status || bodyData.invoice?.status;
@@ -479,48 +452,22 @@ app.post('/api/paydunya/ipn', async (req, res) => {
     if (status === 'completed') {
       let userId = bodyData.custom_data?.user_id;
 
-      if (!supabase) {
-        console.error("Supabase non configuré, impossible de créditer l'utilisateur");
-        return res.status(200).send('OK (supabase non configuré)');
-      }
-
-      if (!userId) {
-        const { data: firstUser, error: findErr } = await supabase.from('users').select('id').limit(1).maybeSingle();
-        if (findErr) console.error('Erreur récupération utilisateur Supabase:', findErr.message);
+      if (supabase && !userId) {
+        const { data: firstUser } = await supabase.from('users').select('id').limit(1).maybeSingle();
         if (firstUser) userId = firstUser.id;
       }
 
-      if (userId) {
+      if (supabase && userId) {
         const cleanUserId = String(userId);
-
-        const { data: user, error: userErr } = await supabase
-          .from('users')
-          .select('credits')
-          .eq('id', cleanUserId)
-          .maybeSingle();
-
-        if (userErr) console.error('Erreur lecture crédits Supabase:', userErr.message);
-
+        const { data: user } = await supabase.from('users').select('credits').eq('id', cleanUserId).maybeSingle();
         const currentCredits = user?.credits || 0;
         const newCredits = currentCredits + 10;
 
-        const { error: upsertErr } = await supabase
-          .from('users')
-          .upsert({ id: cleanUserId, credits: newCredits }, { onConflict: 'id' });
-
-        if (upsertErr) {
-          console.error('Erreur mise à jour/insertion crédits Supabase:', upsertErr.message);
-        } else {
-          console.log(`SUCCÈS PROD : 10 crédits ajoutés à ${cleanUserId}. Nouveau total : ${newCredits}`);
-        }
-      } else {
-        console.error('Aucun utilisateur trouvé dans Supabase pour attribuer les crédits.');
+        await supabase.from('users').upsert({ id: cleanUserId, credits: newCredits }, { onConflict: 'id' });
       }
     }
-
     return res.status(200).send('IPN reçue avec succès');
   } catch (error) {
-    console.error('Erreur traitement IPN PROD:', error.message);
     return res.status(200).send('OK (erreur interceptée)');
   }
 });
