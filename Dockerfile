@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
     cmake \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp en binaire autonome (toujours à jour, pas besoin de Python/pip)
