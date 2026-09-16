@@ -90,8 +90,9 @@ function runCommand(cmd, args) {
     proc.stdout.on('data', (d) => (stdout += d.toString()));
     proc.stderr.on('data', (d) => (stderr += d.toString()));
     proc.on('error', reject);
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (code === 0) resolve(stdout);
+      else if (signal) reject(new Error(`${cmd} a été tué par le signal ${signal} (probablement un manque de mémoire sur le conteneur): ${stderr.slice(-1000)}`));
       else reject(new Error(`${cmd} a échoué (code ${code}): ${stderr.slice(-2000)}`));
     });
   });
@@ -161,6 +162,7 @@ async function cutVerticalClip(sourcePath, outputPath, start, length) {
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
+    '-threads', '2',
     '-c:a', 'aac',
     '-b:a', '128k',
     outputPath
@@ -271,7 +273,7 @@ async function burnSubtitles(inputPath, assPath, outputPath) {
   await runCommand('ffmpeg', [
     '-y', '-i', inputPath,
     '-vf', `subtitles=${escapedAssPath}`,
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-threads', '2',
     '-c:a', 'copy',
     outputPath
   ]);
