@@ -77,8 +77,6 @@ const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_
 // ============================================================
 // STOCKAGE DES JOBS EN MÉMOIRE
 // ============================================================
-// jobs[jobId] = { status, progress, error, clips, createdAt }
-// status: pending | downloading | analyzing | processing | uploading | done | error
 const jobs = {};
 
 setInterval(() => {
@@ -157,7 +155,7 @@ async function downloadVideo(youtubeUrl, outputPath) {
     '-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
     '--merge-output-format', 'mp4',
     '--no-playlist',
-    '--extractor-args', 'youtube:player_client=android',
+    '--extractor-args', 'youtube:player_client=android,ios,tv',
     '-o', outputPath
   ];
   args.push(youtubeUrl);
