@@ -7,6 +7,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws'); // requis par Supabase Realtime sur Node.js < 22
 require('dotenv').config();
 
 const app = express();
@@ -68,7 +69,9 @@ if (process.env.YTDLP_COOKIES) {
 }
 
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
-  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+      realtime: { transport: WebSocket }
+    })
   : null;
 
 // ============================================================
@@ -127,10 +130,6 @@ async function getDuration(filePath) {
 }
 
 function computeClipWindows(duration, clipLength) {
-  // MVP : on répartit des segments de longueur fixe sur toute la vidéo.
-  // La sélection "intelligente" des meilleurs moments (via IA) est une
-  // amélioration prévue en V2 - pour l'instant c'est un échantillonnage
-  // régulier qui couvre le début, le milieu et la fin.
   if (duration <= clipLength + 5) {
     return [{ start: 0, length: Math.max(5, Math.floor(duration)) }];
   }
@@ -161,8 +160,6 @@ async function downloadVideo(youtubeUrl, outputPath) {
     '--extractor-args', 'youtube:player_client=android',
     '-o', outputPath
   ];
-  // Le client "android" ne supporte pas les cookies et yt-dlp l'ignore
-  // s'il en détecte — donc on ne les envoie volontairement PAS ici.
   args.push(youtubeUrl);
   await runCommand('yt-dlp', args);
 }
@@ -188,7 +185,6 @@ async function cutVerticalClip(sourcePath, outputPath, start, length) {
 // TRANSCRIPTION (whisper.cpp local, gratuit) + SOUS-TITRES
 // ============================================================
 async function extractAudioForWhisper(videoPath, audioPath) {
-  // whisper.cpp attend du WAV mono 16kHz
   await runCommand('ffmpeg', [
     '-y', '-i', videoPath,
     '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
@@ -197,8 +193,6 @@ async function extractAudioForWhisper(videoPath, audioPath) {
 }
 
 async function transcribeWordByWord(audioPath, outBase) {
-  // -ml 1 force des segments d'un seul mot => sous-titres mot par mot
-  // (style "pop captions" façon TikTok), avec la timestamp de chaque mot.
   await runCommand(WHISPER_BIN, [
     '-m', WHISPER_MODEL,
     '-f', audioPath,
@@ -283,7 +277,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 }
 
 async function burnSubtitles(inputPath, assPath, outputPath) {
-  // Le filtre "subtitles" de ffmpeg veut un chemin avec les ':' échappés
   const escapedAssPath = assPath.replace(/:/g, '\\:');
   await runCommand('ffmpeg', [
     '-y', '-i', inputPath,
@@ -338,20 +331,16 @@ async function processVideo(jobId, youtubeUrl, clipLength, subtitleStyle) {
       const finalPath = path.join(TMP_DIR, `${jobId}_${i}_final.mp4`);
       tempFiles.push(rawPath, audioPath, `${srtBase}.srt`, assPath, finalPath);
 
-      // 1. Découpage + recadrage vertical
       await cutVerticalClip(sourcePath, rawPath, windows[i].start, windows[i].length);
 
-      // 2. Transcription locale (whisper.cpp)
       await extractAudioForWhisper(rawPath, audioPath);
       const srtPath = await transcribeWordByWord(audioPath, srtBase);
       const cues = fs.existsSync(srtPath) ? parseSrt(fs.readFileSync(srtPath, 'utf8')) : [];
 
-      // 3. Génération + incrustation des sous-titres stylés
       if (cues.length > 0) {
         fs.writeFileSync(assPath, buildAss(cues, subtitleStyle, 1080, 1920));
         await burnSubtitles(rawPath, assPath, finalPath);
       } else {
-        // Pas de parole détectée : on garde le clip tel quel plutôt que d'échouer
         fs.copyFileSync(rawPath, finalPath);
       }
 
